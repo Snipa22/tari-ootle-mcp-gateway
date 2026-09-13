@@ -27,6 +27,7 @@ use rmcp::{
 
 use crate::server::ServerConfig;
 
+pub mod create;
 pub mod discovery;
 pub mod instruction;
 pub mod read;
@@ -49,7 +50,8 @@ impl TariOotleMcpHandler {
             tool_router: Self::tool_router()
                 + Self::tool_router_discovery()
                 + Self::tool_router_read()
-                + Self::tool_router_write(),
+                + Self::tool_router_write()
+                + Self::tool_router_create(),
             config,
         }
     }
@@ -85,12 +87,16 @@ impl ServerHandler for TariOotleMcpHandler {
                  approval required, while mutating functions (is_mut=true) require human \
                  approval before executing a real on-chain transaction, unless this server \
                  was started with --unsafe-auto-approve (which removes the human approval \
-                 step but keeps rate limiting and audit logging). This build registers \
+                 step but keeps rate limiting and audit logging). Constructors (is_mut=false \
+                 but returning a Component<TemplateName>) execute as a REAL submit (never a \
+                 dry run) with no human-approval gate but a real rate limiter, since they \
+                 put no existing balance/state at risk. This build registers \
                  list_ootle_templates, get_ootle_template_abi, call_ootle_read_function \
                  (is_mut=false reads only), call_ootle_write_function (is_mut=true writes, \
                  gated by a single-inflight approval queue unless auto-approve is enabled), \
-                 and approve_ootle_write (a human or a second MCP client session approves or \
-                 denies a pending write by request_id).",
+                 approve_ootle_write (a human or a second MCP client session approves or \
+                 denies a pending write by request_id), and call_ootle_create_function (real \
+                 constructor calls that create new components).",
             )
     }
 }
@@ -140,7 +146,7 @@ mod tests {
     }
 
     #[test]
-    fn tool_router_registers_all_five_tools() {
+    fn tool_router_registers_all_six_tools() {
         let handler = TariOotleMcpHandler::new(test_config(false));
         let names: Vec<String> = handler
             .tool_router
@@ -150,13 +156,14 @@ mod tests {
             .collect();
         assert_eq!(
             names.len(),
-            5,
-            "expected exactly 5 registered tools, got {names:?}"
+            6,
+            "expected exactly 6 registered tools, got {names:?}"
         );
         assert!(names.contains(&"list_ootle_templates".to_string()));
         assert!(names.contains(&"get_ootle_template_abi".to_string()));
         assert!(names.contains(&"call_ootle_read_function".to_string()));
         assert!(names.contains(&"call_ootle_write_function".to_string()));
         assert!(names.contains(&"approve_ootle_write".to_string()));
+        assert!(names.contains(&"call_ootle_create_function".to_string()));
     }
 }
