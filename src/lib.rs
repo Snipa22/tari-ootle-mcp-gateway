@@ -14,6 +14,7 @@
 //! built until AGENTS.md's v1 build order step 6).
 
 pub mod audit;
+pub mod indexer_client;
 pub mod rate_limiter;
 pub mod server;
 pub mod tools;

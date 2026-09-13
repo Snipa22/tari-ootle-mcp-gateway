@@ -18,6 +18,35 @@ sha2 = "0.10.8"
 # git dependency pinned to the exact commit AGENTS.md specifies.
 tari_ootle_walletd_client = { git = "https://github.com/tari-project/tari-ootle.git", rev = "d89dc92fc824d5e4e217e32044a8a17da7c39366" }
 
+# Steps 4-5 (this dispatch): dynamic ABI discovery + read-only dry-run execution need direct
+# access to the same real, pinned-commit engine/transaction types `tari_ootle_walletd_client`
+# already depends on transitively (confirmed via `cargo tree` this session, all already
+# resolved at these exact versions) — pulled directly rather than re-guessed/mirrored, per
+# AGENTS.md's "read it, don't guess" discipline:
+# - `tari_template_abi` (v0.20.0): the REAL `TemplateDef`/`FunctionDef`/`ArgDef`/`Type` wire
+#   shapes the public indexer's `GET /templates/{address}` returns (confirmed byte-for-byte
+#   against a real live fetch this session), so discovery.rs deserializes the genuine ABI
+#   type instead of a hand-rolled mirror.
+# - `tari_template_lib_types` / `tari_ootle_transaction` / `tari_bor` / `tari_engine_types` /
+#   `tari_ootle_common_types`: the real `ComponentAddress`/`TemplateAddress`/`Amount`/
+#   `SubstateId`/`Instruction`/`TransactionBuilder`/`Epoch` types needed to build a genuine
+#   single-instruction `CallMethod`/`CallFunction` transaction for read.rs's dry-run path.
+# - `ootle-network`: the real `Network` enum (byte 0x26 = Esmeralda, confirmed against
+#   `tari_common::configuration::Network` this session) — lighter than depending on
+#   `tari_common` just for this one enum.
+# - `ootle_sdk_core`: the real, already-tested `ArgValue`/`encode_arg` typed-argument DSL
+#   (`crates/ootle_sdk_core/src/types/generic_intent.rs`) and `finalized_from_execute_result`
+#   result summarizer, reused verbatim instead of reinventing JSON-arg-to-CBOR-literal
+#   encoding or dry-run result summarization from scratch.
+tari_template_abi = { git = "https://github.com/tari-project/tari-ootle.git", rev = "d89dc92fc824d5e4e217e32044a8a17da7c39366", features = ["serde"] }
+tari_template_lib_types = { git = "https://github.com/tari-project/tari-ootle.git", rev = "d89dc92fc824d5e4e217e32044a8a17da7c39366", features = ["serde", "std"] }
+tari_ootle_transaction = { git = "https://github.com/tari-project/tari-ootle.git", rev = "d89dc92fc824d5e4e217e32044a8a17da7c39366", features = ["serde"] }
+tari_bor = { git = "https://github.com/tari-project/tari-ootle.git", rev = "d89dc92fc824d5e4e217e32044a8a17da7c39366", features = ["serde"] }
+tari_engine_types = { git = "https://github.com/tari-project/tari-ootle.git", rev = "d89dc92fc824d5e4e217e32044a8a17da7c39366" }
+tari_ootle_common_types = { git = "https://github.com/tari-project/tari-ootle.git", rev = "d89dc92fc824d5e4e217e32044a8a17da7c39366" }
+ootle-network = { git = "https://github.com/tari-project/tari-ootle.git", rev = "d89dc92fc824d5e4e217e32044a8a17da7c39366", features = ["serde"] }
+ootle_sdk_core = { git = "https://github.com/tari-project/tari-ootle.git", rev = "d89dc92fc824d5e4e217e32044a8a17da7c39366" }
+
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "time", "net", "signal", "sync"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -31,6 +60,13 @@ env_logger = "0.11"
 # step 3) and future flags. Universe doesn't need this (Tauri has its own config UI); this
 # standalone binary does.
 clap = { version = "4", features = ["derive", "env"] }
+# Real HTTP client for `indexer_client.rs` (steps 4-5, this dispatch): the public indexer at
+# https://ootle-indexer-a.tari.com is plain HTTPS. `default-tls` (native-tls/openssl) fails to
+# link in this sandbox (a system libcrypto.a here is missing zlib/zstd symbols, confirmed this
+# session) — `tari_indexer_client`'s own transitively-pulled reqwest v0.13 already uses
+# rustls successfully in this environment, so this pins the same TLS backend rather than the
+# default one, sidestepping the link failure instead of masking it.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 [dev-dependencies]
 wiremock = "0.6"
