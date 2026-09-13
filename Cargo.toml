@@ -18,7 +18,7 @@ sha2 = "0.10.8"
 # git dependency pinned to the exact commit AGENTS.md specifies.
 tari_ootle_walletd_client = { git = "https://github.com/tari-project/tari-ootle.git", rev = "d89dc92fc824d5e4e217e32044a8a17da7c39366" }
 
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "time", "net", "signal", "sync"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
@@ -27,6 +27,19 @@ chrono = "0.4"
 dirs = "5.0.1"
 log = "0.4"
 env_logger = "0.11"
+# CLI arg parsing for `--unsafe-auto-approve` (this dispatch, AGENTS.md's v1 build order
+# step 3) and future flags. Universe doesn't need this (Tauri has its own config UI); this
+# standalone binary does.
+clap = { version = "4", features = ["derive", "env"] }
 
 [dev-dependencies]
 wiremock = "0.6"
+# Real end-to-end HTTP client for the server.rs auth-middleware smoke tests (real TCP
+# socket, real requests) — same "prove it with a real client, not a fabricated pass"
+# discipline as walletd_client.rs's wiremock-based tests.
+reqwest = { version = "0.12", default-features = false }
+# server.rs's tests mutate process-wide env vars (TARI_OOTLE_MCP_BEARER_TOKEN /
+# TARI_OOTLE_MCP_LISTEN_ADDR) and the process-wide McpServerManager singleton; cargo runs
+# tests in the same binary concurrently by default, so these must be serialized to avoid
+# flaky cross-test interference.
+serial_test = "3"
