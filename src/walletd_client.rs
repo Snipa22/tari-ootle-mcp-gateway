@@ -40,7 +40,8 @@ use tari_ootle_walletd_client::{
         AccountGetResponse, AccountsGetBalancesRequest, AccountsGetBalancesResponse,
         AccountsListResponse, CallInstructionRequest, TransactionDetectInputsRequest,
         TransactionDetectInputsResponse, TransactionSubmitDryRunRequest,
-        TransactionSubmitDryRunResponse, TransactionSubmitResponse,
+        TransactionSubmitDryRunResponse, TransactionSubmitResponse, TransactionWaitResultRequest,
+        TransactionWaitResultResponse,
     },
 };
 use zeroize::Zeroizing;
@@ -184,6 +185,20 @@ impl WalletdClientWrapper {
         request: TransactionDetectInputsRequest,
     ) -> Result<TransactionDetectInputsResponse, WalletDaemonClientError> {
         self.inner.detect_transaction_inputs(&request).await
+    }
+
+    /// Blocks (server-side, up to the request's `timeout_secs`) until the given transaction
+    /// is finalized, returning its real `FinalizeResult` (events, execution results,
+    /// accept/reject outcome). Added for `tools::create` (AGENTS.md v2 step 1):
+    /// `submit_instruction`'s own response is just a bare `transaction_id` (confirmed
+    /// reading `handlers/transaction.rs` this session) — a caller that needs the REAL
+    /// executed outcome (e.g. a constructor's newly-created component address) must
+    /// separately wait for/fetch the result, there is no shortcut at the submit call site.
+    pub async fn wait_transaction_result(
+        &mut self,
+        request: TransactionWaitResultRequest,
+    ) -> Result<TransactionWaitResultResponse, WalletDaemonClientError> {
+        self.inner.wait_transaction_result(&request).await
     }
 }
 
