@@ -91,7 +91,12 @@ const LOG_TARGET: &str = "tari_ootle_mcp_gateway::tools::write";
 /// reading a fresh clone this session) — reused verbatim per AGENTS.md's instruction ("120s is
 /// Universe's real value — reuse it unless you have a concrete reason not to"), no concrete
 /// reason found.
-const DIALOG_TIMEOUT_SECS: u64 = 120;
+///
+/// `pub(crate)`: `tools::sequence` (`call_ootle_write_sequence`, AGENTS.md v2 step 3) reuses
+/// this EXACT value for its own `await_approval` call — see that module's docs for why it
+/// shares this gate/timeout/limiter rather than building a second parallel safety state
+/// machine.
+pub(crate) const DIALOG_TIMEOUT_SECS: u64 = 120;
 
 /// Sliding-window limit for real write transactions. Universe's own limit is read from a
 /// Tauri-app-wide config singleton this repo has no equivalent of (see `rate_limiter.rs`'s
@@ -107,10 +112,18 @@ const RATE_LIMIT_PER_MINUTE: u32 = 10;
 /// transaction was ~2308 µtTARI). 50_000 is a generous cap, not a target.
 const DEFAULT_MAX_FEE: u64 = 50_000;
 
-static WRITE_DIALOG_GATE: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(1));
+/// `pub(crate)`: the single-inflight semaphore for ALL write-tier transactions on this
+/// gateway, not just `call_ootle_write_function`. `tools::sequence`'s `call_ootle_write_sequence`
+/// (AGENTS.md v2 step 3) acquires this SAME semaphore rather than a second one — see that
+/// module's docs for why one shared gate (and one shared `approve_ootle_write`) is the
+/// correct design, not a parallel safety state machine per write-shaped tool.
+pub(crate) static WRITE_DIALOG_GATE: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(1));
 static INFLIGHT: LazyLock<TokioMutex<Option<InFlightWrite>>> =
     LazyLock::new(|| TokioMutex::new(None));
-static WRITE_RATE_LIMITER: LazyLock<TokioMutex<TransactionRateLimiter>> =
+/// `pub(crate)`: same sharing rationale as [`WRITE_DIALOG_GATE`] — `call_ootle_write_sequence`
+/// draws from this SAME quota, not a second `TransactionRateLimiter` instance, since a
+/// multi-instruction sequence is not a lesser risk than a single write call.
+pub(crate) static WRITE_RATE_LIMITER: LazyLock<TokioMutex<TransactionRateLimiter>> =
     LazyLock::new(|| TokioMutex::new(TransactionRateLimiter::new(RATE_LIMIT_PER_MINUTE)));
 
 struct InFlightWrite {
@@ -119,7 +132,7 @@ struct InFlightWrite {
 }
 
 #[derive(Debug, thiserror::Error)]
-enum WriteToolError {
+pub(crate) enum WriteToolError {
     #[error("invalid address '{address}': {reason}")]
     InvalidAddress { address: String, reason: String },
     #[error(transparent)]
@@ -233,7 +246,13 @@ fn ensure_write_target_is_mutating(
 /// `main.rs`'s cached startup-time connectivity flag: a walletd that goes down, or an API key
 /// that gets rotated/revoked, AFTER startup would otherwise be invisible to every subsequent
 /// write call for the rest of this process's lifetime, defeating the whole point of the check.
-async fn ensure_wallet_ready(client: &mut WalletdClientWrapper) -> Result<(), WriteToolError> {
+///
+/// `pub(crate)`: reused verbatim by `tools::sequence::execute_write_sequence` (AGENTS.md v2
+/// step 3) rather than duplicated — a multi-instruction sequence needs the exact same
+/// PIN-equivalent guarantee before it queues/executes.
+pub(crate) async fn ensure_wallet_ready(
+    client: &mut WalletdClientWrapper,
+) -> Result<(), WriteToolError> {
     client
         .get_accounts_list(0, 1)
         .await
@@ -246,7 +265,15 @@ async fn ensure_wallet_ready(client: &mut WalletdClientWrapper) -> Result<(), Wr
 /// (confirmed reading `transaction.rs` fresh this session): timeout and channel-closed both
 /// clear the in-flight slot so a late/duplicate `approve_ootle_write` call gets a clean "no
 /// transaction awaiting confirmation" error instead of silently no-op'ing.
-async fn await_approval(request_id: String, timeout: Duration) -> Result<(), WriteToolError> {
+///
+/// `pub(crate)`: `tools::sequence`'s `call_ootle_write_sequence` calls this SAME function (not
+/// a copy) so a pending sequence is unblocked by the SAME `approve_ootle_write` tool a pending
+/// single write would be — see `sequence.rs`'s module docs for the full reasoning on why this
+/// gateway deliberately has exactly one write-tier approval queue, not one per tool.
+pub(crate) async fn await_approval(
+    request_id: String,
+    timeout: Duration,
+) -> Result<(), WriteToolError> {
     let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
     {
         let mut inflight = INFLIGHT.lock().await;
@@ -298,6 +325,35 @@ async fn clear_inflight() {
     if let Some(entry) = inflight.take() {
         let _unused = entry.tx.send(false);
     }
+}
+
+// =========================================================================
+// Test-only `pub(crate)` accessors. `tools::sequence`'s tests (AGENTS.md v2 step 3) use these
+// to prove — with a real assertion, not a code-review claim — that a pending
+// `call_ootle_write_sequence` request is genuinely unblocked by the SAME shared
+// `INFLIGHT`/`respond_to_write` mechanism a pending `call_ootle_write_function` request would
+// be, rather than merely asserting the two modules happen to call functions with the same
+// names. Kept `#[cfg(test)]` rather than made unconditionally `pub(crate)`: this is real
+// internal test wiring, not production API surface `sequence.rs`'s non-test code needs (that
+// code only ever needs `await_approval`, which already registers/clears `INFLIGHT` itself).
+// =========================================================================
+
+#[cfg(test)]
+pub(crate) async fn clear_inflight_for_tests() {
+    clear_inflight().await;
+}
+
+#[cfg(test)]
+pub(crate) async fn inflight_request_id_for_tests() -> Option<String> {
+    INFLIGHT.lock().await.as_ref().map(|e| e.request_id.clone())
+}
+
+#[cfg(test)]
+pub(crate) async fn respond_to_write_for_tests(
+    request_id: String,
+    approved: bool,
+) -> Result<(), String> {
+    respond_to_write(request_id, approved).await
 }
 
 #[tool_router(router = tool_router_write, vis = "pub")]
@@ -373,15 +429,19 @@ impl TariOotleMcpHandler {
         result.map(|outcome| outcome.json).map_err(ErrorData::from)
     }
 
-    /// Approves or denies a pending `call_ootle_write_function` call by `request_id`. See
-    /// `write.rs`'s module docs for why this second-MCP-tool mechanism was chosen over a
-    /// separate HTTP endpoint or a CLI prompt.
+    /// Approves or denies a pending `call_ootle_write_function` OR `call_ootle_write_sequence`
+    /// call by `request_id` — both tools share this exact single-inflight approval queue (see
+    /// `sequence.rs`'s module docs). See `write.rs`'s module docs for why this second-MCP-tool
+    /// mechanism was chosen over a separate HTTP endpoint or a CLI prompt.
     #[tool(
         name = "approve_ootle_write",
-        description = "Approve or deny a call_ootle_write_function call that is currently \
-                        blocked awaiting human approval, identified by the request_id that \
-                        call logged. Has no effect (returns an error) if no write is currently \
-                        pending, or if request_id doesn't match the currently pending one."
+        description = "Approve or deny a call_ootle_write_function or call_ootle_write_sequence \
+                        call that is currently blocked awaiting human approval, identified by \
+                        the request_id that call logged (both tools share the same \
+                        single-inflight approval queue - request_ids logged by a sequence are \
+                        prefixed mcp_write_seq_ so you can tell which kind is pending). Has no \
+                        effect (returns an error) if no write is currently pending, or if \
+                        request_id doesn't match the currently pending one."
     )]
     pub async fn approve_ootle_write(
         &self,

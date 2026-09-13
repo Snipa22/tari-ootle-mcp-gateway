@@ -31,6 +31,7 @@ pub mod create;
 pub mod discovery;
 pub mod instruction;
 pub mod read;
+pub mod sequence;
 pub mod write;
 
 /// MCP handler for the Tari Ootle gateway. Holds a prebuilt [`ToolRouter`] (merged from the
@@ -51,7 +52,8 @@ impl TariOotleMcpHandler {
                 + Self::tool_router_discovery()
                 + Self::tool_router_read()
                 + Self::tool_router_write()
-                + Self::tool_router_create(),
+                + Self::tool_router_create()
+                + Self::tool_router_sequence(),
             config,
         }
     }
@@ -95,8 +97,13 @@ impl ServerHandler for TariOotleMcpHandler {
                  (is_mut=false reads only), call_ootle_write_function (is_mut=true writes, \
                  gated by a single-inflight approval queue unless auto-approve is enabled), \
                  approve_ootle_write (a human or a second MCP client session approves or \
-                 denies a pending write by request_id), and call_ootle_create_function (real \
-                 constructor calls that create new components).",
+                 denies a pending write OR write-sequence by request_id), \
+                 call_ootle_create_function (real constructor calls that create new \
+                 components), and call_ootle_write_sequence (a real multi-instruction \
+                 transaction from an ordered list of steps, e.g. withdrawing a bucket then \
+                 handing it to a Bucket-typed argument on another call - the only way to \
+                 supply a Bucket argument in this gateway - sharing the exact same \
+                 single-inflight approval queue as call_ootle_write_function).",
             )
     }
 }
@@ -146,7 +153,7 @@ mod tests {
     }
 
     #[test]
-    fn tool_router_registers_all_six_tools() {
+    fn tool_router_registers_all_seven_tools() {
         let handler = TariOotleMcpHandler::new(test_config(false));
         let names: Vec<String> = handler
             .tool_router
@@ -156,8 +163,8 @@ mod tests {
             .collect();
         assert_eq!(
             names.len(),
-            6,
-            "expected exactly 6 registered tools, got {names:?}"
+            7,
+            "expected exactly 7 registered tools, got {names:?}"
         );
         assert!(names.contains(&"list_ootle_templates".to_string()));
         assert!(names.contains(&"get_ootle_template_abi".to_string()));
@@ -165,5 +172,6 @@ mod tests {
         assert!(names.contains(&"call_ootle_write_function".to_string()));
         assert!(names.contains(&"approve_ootle_write".to_string()));
         assert!(names.contains(&"call_ootle_create_function".to_string()));
+        assert!(names.contains(&"call_ootle_write_sequence".to_string()));
     }
 }
