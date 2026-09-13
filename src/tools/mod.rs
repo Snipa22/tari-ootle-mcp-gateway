@@ -7,13 +7,14 @@
 //! pointing at that field by reference rather than letting the macro rebuild the router on
 //! every call.
 //!
-//! `ootle_discovery` (`discovery.rs`) and `ootle_read` (`read.rs`) — AGENTS.md's v1 build order
-//! steps 4-5 — land in this dispatch as separate `#[tool_router(router = ..., vis = "pub")]`
-//! impl blocks in their own files, merged into this handler's single [`ToolRouter`] in
-//! [`TariOotleMcpHandler::new`] (the real, documented multi-file `#[tool_router]` merge pattern
-//! — confirmed by reading `rmcp-macros` 2.2.0's own doc comment this session, not guessed).
-//! `ootle_transact` (step 6, is_mut=true writes with the full safety-gated approval/rate-limit
-//! path) is a separate, later dispatch — not built here.
+//! `ootle_discovery` (`discovery.rs`), `ootle_read` (`read.rs`) — AGENTS.md's v1 build order
+//! steps 4-5 — and `ootle_transact` (`write.rs`, step 6: is_mut=true writes with the full
+//! safety-gated approval/rate-limit/`--unsafe-auto-approve` path) each land as separate
+//! `#[tool_router(router = ..., vis = "pub")]` impl blocks in their own files, merged into this
+//! handler's single [`ToolRouter`] in [`TariOotleMcpHandler::new`] (the real, documented
+//! multi-file `#[tool_router]` merge pattern — confirmed by reading `rmcp-macros` 2.2.0's own
+//! doc comment this session, not guessed). Shared address-resolution/arg-encoding/
+//! instruction-building plumbing between `read.rs` and `write.rs` lives in `instruction.rs`.
 
 use std::sync::Arc;
 
@@ -27,7 +28,9 @@ use rmcp::{
 use crate::server::ServerConfig;
 
 pub mod discovery;
+pub mod instruction;
 pub mod read;
+pub mod write;
 
 /// MCP handler for the Tari Ootle gateway. Holds a prebuilt [`ToolRouter`] (merged from the
 /// empty base router below plus `discovery`'s and `read`'s routers — see module docs) and a
@@ -45,7 +48,8 @@ impl TariOotleMcpHandler {
         Self {
             tool_router: Self::tool_router()
                 + Self::tool_router_discovery()
-                + Self::tool_router_read(),
+                + Self::tool_router_read()
+                + Self::tool_router_write(),
             config,
         }
     }
@@ -82,9 +86,11 @@ impl ServerHandler for TariOotleMcpHandler {
                  approval before executing a real on-chain transaction, unless this server \
                  was started with --unsafe-auto-approve (which removes the human approval \
                  step but keeps rate limiting and audit logging). This build registers \
-                 list_ootle_templates, get_ootle_template_abi, and call_ootle_read_function \
-                 (is_mut=false reads only); a future call_ootle_write_function for is_mut=true \
-                 writes is a separate, not-yet-built dispatch.",
+                 list_ootle_templates, get_ootle_template_abi, call_ootle_read_function \
+                 (is_mut=false reads only), call_ootle_write_function (is_mut=true writes, \
+                 gated by a single-inflight approval queue unless auto-approve is enabled), \
+                 and approve_ootle_write (a human or a second MCP client session approves or \
+                 denies a pending write by request_id).",
             )
     }
 }
@@ -134,7 +140,7 @@ mod tests {
     }
 
     #[test]
-    fn tool_router_registers_the_three_discovery_and_read_tools() {
+    fn tool_router_registers_all_five_tools() {
         let handler = TariOotleMcpHandler::new(test_config(false));
         let names: Vec<String> = handler
             .tool_router
@@ -144,11 +150,13 @@ mod tests {
             .collect();
         assert_eq!(
             names.len(),
-            3,
-            "expected exactly 3 registered tools, got {names:?}"
+            5,
+            "expected exactly 5 registered tools, got {names:?}"
         );
         assert!(names.contains(&"list_ootle_templates".to_string()));
         assert!(names.contains(&"get_ootle_template_abi".to_string()));
         assert!(names.contains(&"call_ootle_read_function".to_string()));
+        assert!(names.contains(&"call_ootle_write_function".to_string()));
+        assert!(names.contains(&"approve_ootle_write".to_string()));
     }
 }

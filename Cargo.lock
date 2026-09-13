@@ -3762,6 +3762,7 @@ dependencies = [
  "tari_template_lib_types",
  "thiserror 2.0.20",
  "tokio",
+ "uuid",
  "wiremock",
  "zeroize",
 ]

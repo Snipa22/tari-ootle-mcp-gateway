@@ -7,11 +7,17 @@
 //! - Log directory is config-driven (env var, see [`ENV_AUDIT_LOG_PATH`]) instead of
 //!   Tauri's `APPLICATION_FOLDER_ID` + per-network config dir convention, since this repo
 //!   has no `tari_common::configuration::Network` concept of its own.
-//! - Added one new `AuditStatus` variant Universe's doesn't need: [`AuditStatus::AutoApproved`].
-//!   Per AGENTS.md's `--unsafe-auto-approve` design, a transaction executed with no human
-//!   approval must be distinctly audit-tagged so a later audit-log review can immediately
-//!   tell which transactions had no human review — it must never be folded into the normal
-//!   `Success` path.
+//! - Added two new `AuditStatus` variants Universe's doesn't need:
+//!   [`AuditStatus::AutoApproved`] and [`AuditStatus::Timeout`]. Per AGENTS.md's
+//!   `--unsafe-auto-approve` design, a transaction executed with no human approval must be
+//!   distinctly audit-tagged so a later audit-log review can immediately tell which
+//!   transactions had no human review — it must never be folded into the normal `Success`
+//!   path. Similarly, DISPATCH_BRIEF.md's step 6 (`call_ootle_write_function`'s approval
+//!   state machine) explicitly asks for a distinct timeout status ("Started/Success/Error/
+//!   Denied/Timeout statuses as appropriate") rather than folding a 120s approval timeout
+//!   into the generic `Error` bucket Universe itself uses for that case — a reviewer scanning
+//!   the audit log should be able to tell "nobody responded in time" apart from "something
+//!   actually broke" at a glance.
 //!
 //! Core `AuditEntry`/`AuditLog`/`AuditStatus` shapes and the ring-buffer + append-only
 //! JSONL-with-rotation persistence pattern are kept as close to the original as possible,
@@ -74,6 +80,11 @@ pub enum AuditStatus {
     /// transaction that had no human review, per AGENTS.md's non-negotiable requirement
     /// for that flag.
     AutoApproved,
+    /// A write transaction's approval request timed out waiting for `approve_ootle_write`
+    /// (see `tools::write`'s `DIALOG_TIMEOUT_SECS`). Distinct from `Error` so an audit-log
+    /// review can tell "nobody approved/denied in time" apart from a genuine execution
+    /// failure — DISPATCH_BRIEF.md's step 6 explicitly calls for this as its own status.
+    Timeout,
 }
 
 pub struct AuditLog {
@@ -261,6 +272,17 @@ mod tests {
             "AutoApproved must never be folded into the normal Success path"
         );
         assert_eq!(auto_approved, "\"AutoApproved\"");
+    }
+
+    #[test]
+    fn timeout_status_serializes_distinctly_from_error() {
+        let error = serde_json::to_string(&AuditStatus::Error).unwrap();
+        let timeout = serde_json::to_string(&AuditStatus::Timeout).unwrap();
+        assert_ne!(
+            error, timeout,
+            "Timeout must never be folded into the generic Error path"
+        );
+        assert_eq!(timeout, "\"Timeout\"");
     }
 
     #[test]

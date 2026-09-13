@@ -47,6 +47,14 @@ tari_ootle_common_types = { git = "https://github.com/tari-project/tari-ootle.gi
 ootle-network = { git = "https://github.com/tari-project/tari-ootle.git", rev = "d89dc92fc824d5e4e217e32044a8a17da7c39366", features = ["serde"] }
 ootle_sdk_core = { git = "https://github.com/tari-project/tari-ootle.git", rev = "d89dc92fc824d5e4e217e32044a8a17da7c39366" }
 
+# `write.rs`'s approval-request IDs (AGENTS.md step 6, `mcp_write_<uuid>`), same "real
+# request_id, not a guessable counter" discipline as Universe's own `send_transaction`
+# (`mcp_tx_{}`, `uuid::Uuid::new_v4()`, confirmed reading a fresh clone of
+# tari-project/universe's src-tauri/src/mcp/tools/transaction.rs this session). Already a
+# transitive dependency at this exact version (see Cargo.lock) but pinned explicitly with the
+# "v4" feature this crate's own code needs, rather than relying on some other dependency
+# happening to enable it.
+uuid = { version = "1", features = ["v4"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "time", "net", "signal", "sync"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
