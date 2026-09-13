@@ -53,7 +53,21 @@ pub const ENV_WALLETD_URL: &str = "TARI_OOTLE_MCP_WALLETD_URL";
 /// ecosystem's default config; the *host* in real deployments (e.g. the live
 /// `192.168.40.132` CT132 instance documented in AGENTS.md) must come from
 /// [`ENV_WALLETD_URL`], never hardcoded here.
-pub const DEFAULT_WALLETD_URL: &str = "http://127.0.0.1:12009";
+///
+/// **Must include the `/json_rpc` path suffix.** `WalletDaemonClient::connect` uses
+/// `endpoint` VERBATIM as the JSON-RPC POST target (confirmed reading
+/// `clients/wallet_daemon_client/src/lib.rs` at the pinned commit — it does NOT append
+/// `/json_rpc` itself). Confirmed live this session (2026-09-13) against the real deployed
+/// `tari_ootle_walletd` on proxmox-tari CT132 (`192.168.40.132:12009`): with a bare
+/// `http://host:12009` endpoint (no `/json_rpc`), the client's POST hit walletd's own web UI
+/// (served at `/`) and got HTML back instead of a JSON-RPC response, producing "expected
+/// value at line 1 column 1" JSON decode errors on every single call. Setting the endpoint
+/// to `http://host:12009/json_rpc` fixed it immediately. Every existing mock-based test in
+/// this repo previously passed because `wiremock`'s mock happened to be mounted at its own
+/// base URL's root (`.and(path("/"))`), which made this bug invisible in unit tests — see
+/// this module's `dials_the_configured_endpoint_verbatim_including_path_suffix` test below
+/// for the regression coverage that would have caught it.
+pub const DEFAULT_WALLETD_URL: &str = "http://127.0.0.1:12009/json_rpc";
 /// Env var for the walletd API key. No default — per AGENTS.md this must be explicitly
 /// supplied and must never be hardcoded, even as a "temporary" fallback.
 pub const ENV_WALLETD_API_KEY: &str = "TARI_OOTLE_MCP_WALLETD_API_KEY";
@@ -211,6 +225,91 @@ mod tests {
         let resp: AccountsListResponse = client.get_accounts_list(0, 10).await.unwrap();
         assert_eq!(resp.total, 0);
         assert!(resp.accounts.is_empty());
+    }
+
+    // =========================================================================
+    // Regression coverage for the real "missing /json_rpc suffix" bug (DISPATCH_BRIEF.md
+    // v2 step 1, finding 1). Every OTHER test in this module mounts its mock at `path("/")`
+    // and configures the endpoint as the mock server's bare `server.uri()` (also `/`), so
+    // none of them would ever have caught a client that silently dropped a configured path
+    // suffix - the mock's own root happened to already be "the" endpoint. These two tests
+    // mount the mock at `/json_rpc` specifically and configure the endpoint WITH that
+    // suffix, so they only pass if the client dials the CONFIGURED URL verbatim, path
+    // suffix included, rather than always POSTing to the bare host root.
+    // =========================================================================
+
+    #[tokio::test]
+    async fn dials_the_configured_endpoint_verbatim_including_path_suffix() {
+        let server = MockServer::start().await;
+        // Deliberately NOT mounted at "/" - only at "/json_rpc", mirroring the real
+        // DEFAULT_WALLETD_URL shape. If the client ever regresses to POSTing to the bare
+        // root (dropping the configured suffix), wiremock will have no matching mock for
+        // that request and this test will fail.
+        Mock::given(method("POST"))
+            .and(path("/json_rpc"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": { "accounts": [], "total": 0 }
+            })))
+            .mount(&server)
+            .await;
+
+        let endpoint = format!("{}/json_rpc", server.uri());
+        let mut client = WalletdClientWrapper::connect(&config_for(endpoint)).unwrap();
+        let resp = client
+            .get_accounts_list(0, 10)
+            .await
+            .expect("client must dial the configured /json_rpc suffix verbatim");
+        assert_eq!(resp.total, 0);
+    }
+
+    #[tokio::test]
+    async fn configured_path_suffix_mismatch_with_server_mount_fails_realistically() {
+        let server = MockServer::start().await;
+        // Mock only answers at the bare root - simulating a client that (incorrectly)
+        // dropped a configured "/json_rpc" suffix and dialed "/" instead, exactly the real
+        // bug this dispatch fixes (walletd's own web UI is served at "/", not JSON-RPC).
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": { "accounts": [], "total": 0 }
+            })))
+            .mount(&server)
+            .await;
+
+        // Configure the endpoint WITH the "/json_rpc" suffix - since the mock is only
+        // mounted at "/", a real client that (correctly) dials the configured URL verbatim
+        // must fail here (no matching mock), proving the endpoint's path is genuinely
+        // significant rather than being silently normalized away.
+        let endpoint = format!("{}/json_rpc", server.uri());
+        let mut client = WalletdClientWrapper::connect(&config_for(endpoint)).unwrap();
+        let err = client.get_accounts_list(0, 10).await.unwrap_err();
+        // wiremock's `MockServer` (with no matching mock registered) replies 404 by
+        // default, which this client surfaces as a real HTTP-status error - not a panic,
+        // not a silent success.
+        assert!(
+            matches!(
+                err,
+                WalletDaemonClientError::RequestFailedWithStatus { .. }
+                    | WalletDaemonClientError::RequestFailed { .. }
+            ),
+            "expected a real request failure when the configured path suffix has no \
+             matching mock, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn default_walletd_url_includes_the_required_json_rpc_suffix() {
+        // The real regression this dispatch fixes: DEFAULT_WALLETD_URL used to be
+        // "http://127.0.0.1:12009" with no path, which silently dialed walletd's own web UI
+        // instead of its JSON-RPC endpoint (see this constant's doc comment).
+        assert!(
+            DEFAULT_WALLETD_URL.ends_with("/json_rpc"),
+            "DEFAULT_WALLETD_URL must include the /json_rpc suffix: {DEFAULT_WALLETD_URL}"
+        );
     }
 
     #[tokio::test]
