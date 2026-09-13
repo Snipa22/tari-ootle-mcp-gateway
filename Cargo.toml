@@ -1,0 +1,32 @@
+[package]
+name = "tari-ootle-mcp-gateway"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97.1"
+
+[dependencies]
+# rmcp/axum/schemars/sha2 pinned now per AGENTS.md's v1 build order step 1, even though
+# mcp::server / #[tool]-decorated tools are NOT built in this dispatch (that's step 3+).
+# Versions confirmed against a fresh tari-project/universe clone's src-tauri/Cargo.toml
+# this session (2026-09-13).
+rmcp = { version = "2.0", features = ["server", "macros", "transport-streamable-http-server"] }
+axum = "0.8"
+schemars = "1"
+sha2 = "0.10.8"
+
+# tari_ootle_walletd_client is NOT published to crates.io (confirmed this session) -
+# git dependency pinned to the exact commit AGENTS.md specifies.
+tari_ootle_walletd_client = { git = "https://github.com/tari-project/tari-ootle.git", rev = "d89dc92fc824d5e4e217e32044a8a17da7c39366" }
+
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "time"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+zeroize = "1"
+chrono = "0.4"
+dirs = "5.0.1"
+log = "0.4"
+env_logger = "0.11"
+
+[dev-dependencies]
+wiremock = "0.6"
