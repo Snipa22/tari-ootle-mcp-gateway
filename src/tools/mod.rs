@@ -1,17 +1,19 @@
-//! Skeleton MCP tool router for `tari-ootle-mcp-gateway`.
+//! MCP tool router for `tari-ootle-mcp-gateway`.
 //!
-//! This dispatch (AGENTS.md's v1 build order step 3) only wires up the
-//! [`TariOotleMcpHandler`] struct, an empty `#[tool_router]` impl block, and
-//! `ServerHandler::get_info()` — mirroring `tari-project/universe`'s
-//! `src-tauri/src/mcp/tools/mod.rs` pattern (read fresh from a clone of that repo this
-//! session, not guessed): the `#[derive(Clone)]` handler struct holding a prebuilt
-//! `ToolRouter<Self>` field, and `#[tool_handler(router = (&self.tool_router))]` pointing
-//! at that field by reference rather than letting the macro rebuild the router on every
-//! call.
+//! Steps 1-3 wired up the [`TariOotleMcpHandler`] struct and `ServerHandler::get_info()` —
+//! mirroring `tari-project/universe`'s `src-tauri/src/mcp/tools/mod.rs` pattern (read fresh
+//! from a clone of that repo this session, not guessed): the `#[derive(Clone)]` handler struct
+//! holding a prebuilt `ToolRouter<Self>` field, and `#[tool_handler(router = (&self.tool_router))]`
+//! pointing at that field by reference rather than letting the macro rebuild the router on
+//! every call.
 //!
-//! Real `#[tool]`-decorated functions (`ootle_discovery::list_templates`,
-//! `ootle_read::*`, `ootle_transact::*`) land in later dispatches per AGENTS.md's v1 build
-//! order steps 4-6 — this file intentionally has zero real tools yet.
+//! `ootle_discovery` (`discovery.rs`) and `ootle_read` (`read.rs`) — AGENTS.md's v1 build order
+//! steps 4-5 — land in this dispatch as separate `#[tool_router(router = ..., vis = "pub")]`
+//! impl blocks in their own files, merged into this handler's single [`ToolRouter`] in
+//! [`TariOotleMcpHandler::new`] (the real, documented multi-file `#[tool_router]` merge pattern
+//! — confirmed by reading `rmcp-macros` 2.2.0's own doc comment this session, not guessed).
+//! `ootle_transact` (step 6, is_mut=true writes with the full safety-gated approval/rate-limit
+//! path) is a separate, later dispatch — not built here.
 
 use std::sync::Arc;
 
@@ -24,11 +26,14 @@ use rmcp::{
 
 use crate::server::ServerConfig;
 
-/// MCP handler for the Tari Ootle gateway. Holds a prebuilt [`ToolRouter`] (currently
-/// empty) and a shared [`ServerConfig`] — the latter not read by any tool yet in this
-/// dispatch, but wired through now (per the dispatch brief) so the `--unsafe-auto-approve`
-/// flag doesn't need to be retrofitted into every tool's construction path once
-/// `ootle_transact` lands.
+pub mod discovery;
+pub mod read;
+
+/// MCP handler for the Tari Ootle gateway. Holds a prebuilt [`ToolRouter`] (merged from the
+/// empty base router below plus `discovery`'s and `read`'s routers — see module docs) and a
+/// shared [`ServerConfig`] — not read by either tool in this dispatch, but wired through
+/// already (from steps 1-3) so a future `ootle_transact`'s `--unsafe-auto-approve` handling
+/// doesn't need to retrofit this plumbing.
 #[derive(Clone)]
 pub struct TariOotleMcpHandler {
     tool_router: ToolRouter<Self>,
@@ -38,7 +43,9 @@ pub struct TariOotleMcpHandler {
 impl TariOotleMcpHandler {
     pub fn new(config: Arc<ServerConfig>) -> Self {
         Self {
-            tool_router: Self::tool_router(),
+            tool_router: Self::tool_router()
+                + Self::tool_router_discovery()
+                + Self::tool_router_read(),
             config,
         }
     }
@@ -74,18 +81,21 @@ impl ServerHandler for TariOotleMcpHandler {
                  approval required, while mutating functions (is_mut=true) require human \
                  approval before executing a real on-chain transaction, unless this server \
                  was started with --unsafe-auto-approve (which removes the human approval \
-                 step but keeps rate limiting and audit logging). No discovery/read/transact \
-                 tools are registered in this build yet — this is the server/auth scaffold \
-                 only; dynamic tools land in a later release.",
+                 step but keeps rate limiting and audit logging). This build registers \
+                 list_ootle_templates, get_ootle_template_abi, and call_ootle_read_function \
+                 (is_mut=false reads only); a future call_ootle_write_function for is_mut=true \
+                 writes is a separate, not-yet-built dispatch.",
             )
     }
 }
 
 #[tool_router]
 impl TariOotleMcpHandler {
-    // Intentionally empty: zero real `#[tool]`-decorated functions in this dispatch. See
-    // AGENTS.md's v1 build order steps 4-6 (`ootle_discovery`, `ootle_read`,
-    // `ootle_transact`) for what lands here next.
+    // Intentionally empty: this handler's own base router contributes zero tools. The real
+    // `#[tool]`-decorated functions live in `discovery.rs` (`tool_router_discovery`) and
+    // `read.rs` (`tool_router_read`), merged into `Self::new`'s `tool_router` field — see this
+    // module's doc comment. A future `ootle_transact` (AGENTS.md step 6) would add a third
+    // `tool_router_transact()` the same way.
 }
 
 #[cfg(test)]
@@ -124,8 +134,21 @@ mod tests {
     }
 
     #[test]
-    fn tool_router_starts_empty() {
+    fn tool_router_registers_the_three_discovery_and_read_tools() {
         let handler = TariOotleMcpHandler::new(test_config(false));
-        assert_eq!(handler.tool_router.list_all().len(), 0);
+        let names: Vec<String> = handler
+            .tool_router
+            .list_all()
+            .into_iter()
+            .map(|t| t.name.to_string())
+            .collect();
+        assert_eq!(
+            names.len(),
+            3,
+            "expected exactly 3 registered tools, got {names:?}"
+        );
+        assert!(names.contains(&"list_ootle_templates".to_string()));
+        assert!(names.contains(&"get_ootle_template_abi".to_string()));
+        assert!(names.contains(&"call_ootle_read_function".to_string()));
     }
 }

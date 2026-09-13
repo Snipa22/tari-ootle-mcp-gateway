@@ -1659,6 +1659,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tower-service",
+ "webpki-roots",
 ]
 
 [[package]]
@@ -2389,6 +2390,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "ootle_sdk_core"
+version = "0.41.0"
+source = "git+https://github.com/tari-project/tari-ootle.git?rev=d89dc92fc824d5e4e217e32044a8a17da7c39366#d89dc92fc824d5e4e217e32044a8a17da7c39366"
+dependencies = [
+ "blake2 0.10.6",
+ "hex",
+ "ootle-network",
+ "ootle_byte_type",
+ "rand 0.10.2",
+ "serde",
+ "serde_json",
+ "tari_bor",
+ "tari_consensus_types",
+ "tari_crypto",
+ "tari_engine_types",
+ "tari_ootle_address",
+ "tari_ootle_common_types",
+ "tari_ootle_template_metadata",
+ "tari_ootle_transaction",
+ "tari_ootle_wallet_crypto",
+ "tari_template_builtin",
+ "tari_template_lib_types",
+ "thiserror 2.0.20",
+ "zeroize",
+]
+
+[[package]]
 name = "ootle_serde"
 version = "0.6.0"
 source = "git+https://github.com/tari-project/tari-ootle.git?rev=d89dc92fc824d5e4e217e32044a8a17da7c39366#d89dc92fc824d5e4e217e32044a8a17da7c39366"
@@ -2986,16 +3014,21 @@ dependencies = [
  "http-body",
  "http-body-util",
  "hyper",
+ "hyper-rustls",
  "hyper-util",
  "js-sys",
  "log",
  "percent-encoding",
  "pin-project-lite",
+ "quinn",
+ "rustls",
+ "rustls-pki-types",
  "serde",
  "serde_json",
  "serde_urlencoded",
  "sync_wrapper",
  "tokio",
+ "tokio-rustls",
  "tower",
  "tower-http",
  "tower-service",
@@ -3003,6 +3036,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+ "webpki-roots",
 ]
 
 [[package]]
@@ -3156,6 +3190,7 @@ checksum = "6725596c3f2c3a0aef021139e145d4eafe314a6623e4680ca83852b2c67ab2ba"
 dependencies = [
  "aws-lc-rs",
  "once_cell",
+ "ring",
  "rustls-pki-types",
  "rustls-webpki",
  "subtle",
@@ -3709,6 +3744,8 @@ dependencies = [
  "dirs",
  "env_logger",
  "log",
+ "ootle-network",
+ "ootle_sdk_core",
  "reqwest 0.12.28",
  "rmcp",
  "schemars",
@@ -3716,7 +3753,13 @@ dependencies = [
  "serde_json",
  "serial_test",
  "sha2",
+ "tari_bor",
+ "tari_engine_types",
+ "tari_ootle_common_types",
+ "tari_ootle_transaction",
  "tari_ootle_walletd_client",
+ "tari_template_abi",
+ "tari_template_lib_types",
  "thiserror 2.0.20",
  "tokio",
  "wiremock",
@@ -4957,6 +5000,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "webpki-roots"
+version = "1.0.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7dcd9d09a39985f5344844e66b0c530a33843579125f23e21e9f0f220850f22a"
+dependencies = [
+ "rustls-pki-types",
+]
+
+[[package]]
 name = "winapi"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4978,7 +5030,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]

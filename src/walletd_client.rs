@@ -37,9 +37,10 @@ use tari_ootle_walletd_client::{
     ComponentAddressOrName, WalletDaemonClient,
     error::WalletDaemonClientError,
     types::{
-        AccountsGetBalancesRequest, AccountsGetBalancesResponse, AccountsListResponse,
-        CallInstructionRequest, TransactionDetectInputsRequest, TransactionDetectInputsResponse,
-        TransactionSubmitDryRunRequest, TransactionSubmitDryRunResponse, TransactionSubmitResponse,
+        AccountGetResponse, AccountsGetBalancesRequest, AccountsGetBalancesResponse,
+        AccountsListResponse, CallInstructionRequest, TransactionDetectInputsRequest,
+        TransactionDetectInputsResponse, TransactionSubmitDryRunRequest,
+        TransactionSubmitDryRunResponse, TransactionSubmitResponse,
     },
 };
 use zeroize::Zeroizing;
@@ -123,6 +124,26 @@ impl WalletdClientWrapper {
                 refresh,
             })
             .await
+    }
+
+    /// Looks up an account by name or component address. Added in steps 4-5 (this dispatch)
+    /// for `read.rs`'s `fee_account` resolution: a dry run's `TransactionSubmitDryRunRequest`
+    /// still requires a real `seal_signer` `KeyId`, which this call's
+    /// `AccountGetResponse.account.owner_key_id` supplies.
+    pub async fn get_account(
+        &mut self,
+        name_or_address: ComponentAddressOrName,
+    ) -> Result<AccountGetResponse, WalletDaemonClientError> {
+        self.inner.accounts_get(name_or_address).await
+    }
+
+    /// Looks up walletd's configured default account. Added in steps 4-5 (this dispatch) as the
+    /// `read.rs` fallback when a `call_ootle_read_function` call does not specify an explicit
+    /// `fee_account`.
+    pub async fn get_default_account(
+        &mut self,
+    ) -> Result<AccountGetResponse, WalletDaemonClientError> {
+        self.inner.accounts_get_default().await
     }
 
     /// Submits a single instruction for execution as a real transaction (spends fees,
