@@ -472,7 +472,17 @@ async fn execute_create_call(
         fee_account,
         max_fee,
         inputs: vec![],
-        override_inputs: None,
+        // MUST be `Some(true)`, not `None`/`Some(false)`. Confirmed by reading the real
+        // handler (`applications/tari_walletd/src/handlers/transaction.rs::
+        // handle_submit_instruction`, pinned commit d89dc92): this field is passed straight
+        // through as `detect_inputs: req.override_inputs.unwrap_or_default()` to
+        // `submit_inner`, which only resolves/attaches the transaction's real required
+        // input substates (including the fee-paying account's own substate) when
+        // `detect_inputs` is true. Leaving this `None` was the real root cause of a live
+        // rejection (`Substates not found: ... fee_account not found`) confirmed against
+        // the live CT132 walletd on 2026-09-13 — see DISPATCH_BRIEF.md v2 step 2 and this
+        // module's own regression test below.
+        override_inputs: Some(true),
         new_outputs: None,
         proof_ids: vec![],
         min_epoch: None,
@@ -667,6 +677,101 @@ mod tests {
             !limiter.check_transaction_allowed(),
             "the request beyond the configured per-minute limit must be refused"
         );
+    }
+
+    // =========================================================================
+    // Regression test for DISPATCH_BRIEF.md v2 step 2's real live bug: a constructor call
+    // submitted with `override_inputs: None` was REJECTED by the real engine on the live
+    // CT132 walletd ("Substates not found: ... fee_account not found") because
+    // `override_inputs.unwrap_or_default()` maps straight through to walletd's real
+    // `detect_inputs` (confirmed reading `handlers/transaction.rs::
+    // handle_submit_instruction`, pinned commit d89dc92) - `false`/`None` means the fee
+    // account's own substate is never resolved as a transaction input. This asserts the
+    // REAL outgoing JSON-RPC request body actually has `override_inputs: true` set - a mock
+    // that only matches that exact shape stands in for the real walletd; if the fix
+    // regresses back to `None`/`false`, wiremock has no matching mock for the
+    // submit_instruction call and this test fails with a real "no matching mock" client
+    // error, not a hand-inspected assertion on a struct field.
+    // =========================================================================
+
+    #[tokio::test]
+    async fn submit_instruction_request_sets_override_inputs_true() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(body_partial_json(jsonify!({"method": "accounts.list"})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(jsonify!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {"accounts": [], "total": 0}
+            })))
+            .mount(&server)
+            .await;
+
+        // The critical assertion: this mock ONLY matches a submit_instruction request whose
+        // real `params.override_inputs` is `true`. If create.rs's construction regresses to
+        // `None`/`Some(false)`, this mock does not match and the client call below errors.
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(body_partial_json(jsonify!({
+                "method": "transactions.submit_instruction",
+                "params": {"override_inputs": true}
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(jsonify!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "result": {"transaction_id": "55".repeat(32)}
+            })))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(body_partial_json(
+                jsonify!({"method": "transactions.wait_result"}),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(jsonify!({
+                "jsonrpc": "2.0",
+                "id": 3,
+                "result": {
+                    "transaction_id": "55".repeat(32),
+                    "result": real_finalize_result_with_new_component(
+                        ComponentAddress::from_hex(&"66".repeat(32)).unwrap(),
+                    ),
+                    "status": "Accepted",
+                    "final_fee": 2308,
+                    "timed_out": false,
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        unsafe {
+            std::env::set_var(crate::walletd_client::ENV_WALLETD_URL, server.uri());
+            std::env::set_var(crate::walletd_client::ENV_WALLETD_API_KEY, "tw_test_key");
+        }
+
+        let req = CallOotleCreateFunctionRequest {
+            template_address: "80e76c2a2fd86de97ec3849e3495cbf8419a900c81389a1459e5368b7a12b1c4"
+                .to_string(),
+            function: "create".to_string(),
+            args: vec![jsonify!({"List": []}), jsonify!({"U64": 1})],
+            fee_account:
+                "component_86d532912d9c22b7f4a191d5a00d532c5bc5af3672c651e64094578bef90faf5"
+                    .to_string(),
+            max_fee: Some(50_000),
+        };
+
+        execute_create_call(req).await.expect(
+            "create call must succeed, which requires the real submit_instruction request to \
+             have carried override_inputs: true - if this fails, the fix regressed",
+        );
+
+        unsafe {
+            std::env::remove_var(crate::walletd_client::ENV_WALLETD_URL);
+            std::env::remove_var(crate::walletd_client::ENV_WALLETD_API_KEY);
+        }
     }
 
     // =========================================================================

@@ -521,7 +521,19 @@ async fn execute_write_call(
         fee_account,
         max_fee,
         inputs: vec![],
-        override_inputs: None,
+        // MUST be `Some(true)`, not `None`/`Some(false)`. Confirmed by reading the real
+        // handler (`applications/tari_walletd/src/handlers/transaction.rs::
+        // handle_submit_instruction`, pinned commit d89dc92): this field is passed straight
+        // through as `detect_inputs: req.override_inputs.unwrap_or_default()` to
+        // `submit_inner`, which only resolves/attaches the transaction's real required
+        // input substates (including the fee-paying account's own substate) when
+        // `detect_inputs` is true. This was previously left `None` here too — the same real
+        // bug DISPATCH_BRIEF.md v2 step 2 found live-testing `create.rs`'s identical
+        // construction, confirmed to affect this write path as well (not yet exposed by a
+        // live test that happened to already have the fee account's substate cached/
+        // otherwise resolvable, but the same root cause applies). See create.rs's matching
+        // fix and this module's own regression test below.
+        override_inputs: Some(true),
         new_outputs: None,
         proof_ids: vec![],
         min_epoch: None,
@@ -748,6 +760,93 @@ mod tests {
             !limiter.check_transaction_allowed(),
             "the request beyond the configured per-minute limit must be refused"
         );
+    }
+
+    // =========================================================================
+    // Regression test for DISPATCH_BRIEF.md v2 step 2's real live bug (confirmed to affect
+    // this write path too, per this dispatch's own cross-check, even though it hadn't been
+    // live-tested against a case that exposed it yet): a write submitted with
+    // `override_inputs: None` maps straight through to walletd's real `detect_inputs`
+    // (`override_inputs.unwrap_or_default()`, confirmed reading
+    // `handlers/transaction.rs::handle_submit_instruction`, pinned commit d89dc92) - `false`/
+    // `None` means the fee account's own substate is never resolved as a transaction input,
+    // the exact real cause of the live "Substates not found: ... fee_account not found"
+    // rejection observed against `call_ootle_create_function`. This asserts the REAL
+    // outgoing JSON-RPC request body actually has `override_inputs: true` set: a mock that
+    // only matches that exact shape stands in for the real walletd; if the fix regresses
+    // back to `None`/`false`, wiremock has no matching mock for the submit_instruction call
+    // and this test fails with a real "no matching mock" client error, not a hand-inspected
+    // assertion on a struct field. Uses `--unsafe-auto-approve` config to skip the
+    // approval-wait step, keeping this test focused purely on the request body shape.
+    // =========================================================================
+
+    #[tokio::test]
+    #[serial(write_state)]
+    async fn submit_instruction_request_sets_override_inputs_true() {
+        clear_inflight().await;
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(body_partial_json(jsonify!({"method": "accounts.list"})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(jsonify!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {"accounts": [], "total": 0}
+            })))
+            .mount(&server)
+            .await;
+
+        // The critical assertion: this mock ONLY matches a submit_instruction request whose
+        // real `params.override_inputs` is `true`. If write.rs's construction regresses to
+        // `None`/`Some(false)`, this mock does not match and the client call below errors.
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(body_partial_json(jsonify!({
+                "method": "transactions.submit_instruction",
+                "params": {"override_inputs": true}
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(jsonify!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "result": {"transaction_id": "77".repeat(32)}
+            })))
+            .mount(&server)
+            .await;
+
+        unsafe {
+            std::env::set_var(crate::walletd_client::ENV_WALLETD_URL, server.uri());
+            std::env::set_var(crate::walletd_client::ENV_WALLETD_API_KEY, "tw_test_key");
+        }
+
+        let req = CallOotleWriteFunctionRequest {
+            address: "component_86d532912d9c22b7f4a191d5a00d532c5bc5af3672c651e64094578bef90faf5"
+                .to_string(),
+            function: "withdraw".to_string(),
+            args: vec![
+                jsonify!({"Address": format!("resource_{}", "22".repeat(32))}),
+                jsonify!({"Amount": 1000}),
+            ],
+            fee_account:
+                "component_86d532912d9c22b7f4a191d5a00d532c5bc5af3672c651e64094578bef90faf5"
+                    .to_string(),
+            max_fee: Some(50_000),
+        };
+        let config = Arc::new(ServerConfig {
+            listen_addr: "127.0.0.1:0".parse().unwrap(),
+            bearer_token: "test_token".to_string(),
+            unsafe_auto_approve: true,
+        });
+
+        execute_write_call(req, config).await.expect(
+            "write call must succeed, which requires the real submit_instruction request to \
+             have carried override_inputs: true - if this fails, the fix regressed",
+        );
+
+        unsafe {
+            std::env::remove_var(crate::walletd_client::ENV_WALLETD_URL);
+            std::env::remove_var(crate::walletd_client::ENV_WALLETD_API_KEY);
+        }
     }
 
     // =========================================================================
