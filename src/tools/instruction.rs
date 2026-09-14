@@ -396,6 +396,77 @@ mod tests {
         assert_eq!(encoded.len(), 1);
     }
 
+    /// DISPATCH_BRIEF.md v2 step 4: proves `ArgValue::List` of `ArgValue::Bytes` elements
+    /// already encodes a composite/multi-field struct argument byte-identically to the real
+    /// `minicbor`-derived `Encode` impl a genuine template parameter of that type actually
+    /// uses — no new `ArgValue` variant is needed.
+    ///
+    /// `SchnorrSignatureBytes { public_nonce: RistrettoPublicKeyBytes, signature: Scalar32Bytes }`
+    /// (`tari_template_lib_types::crypto::schnorr`, pinned commit `d89dc92`) derives
+    /// `#[derive(Encode, Decode, CborLen)]` with NO `#[cbor(map)]`/`#[cbor(transparent)]`
+    /// attribute, so `minicbor-derive` (confirmed reading `minicbor-derive` 0.19.5's own
+    /// `Encoding::default() == Encoding::Array` and `encode_fields`'s `Encoding::Array` arm
+    /// this session) encodes it as a definite-length CBOR array of its two fields in
+    /// declaration order (`public_nonce` then `signature`), each field lowered via its own
+    /// `Encode` impl. Both `RistrettoPublicKeyBytes` and `Scalar32Bytes` are `#[cbor(with =
+    /// "minicbor::bytes")]` single-field newtypes, so each lowers to a definite-length CBOR
+    /// byte string — exactly what `ArgValue::Bytes` produces (see `generic_intent.rs`'s
+    /// `ArgValue::Bytes` arm: `InstructionArg::literal(tari_bor::Value::Bytes(...))`).
+    ///
+    /// This test builds a REAL `SchnorrSignatureBytes` value, encodes it via the exact same
+    /// `tari_bor::encode` (= `minicbor`-backed) encoder the engine's own decoder is the
+    /// counterpart of, and asserts the gateway's `{"List": [{"Bytes": ...}, {"Bytes":
+    /// ...}]}`-shaped `ArgValue` produces byte-IDENTICAL literal bytes — the strongest
+    /// available proof short of live network access to a real `tari_ootle_walletd`/validator
+    /// (see module's sibling live test below and this dispatch's report for why that's
+    /// unreachable from this sandbox).
+    #[test]
+    fn schnorr_signature_bytes_list_encodes_byte_identically_to_the_real_minicbor_struct() {
+        use tari_template_lib_types::crypto::{
+            RistrettoPublicKeyBytes, Scalar32Bytes, SchnorrSignatureBytes,
+        };
+
+        let public_nonce_bytes: [u8; 32] = std::array::from_fn(|i| i as u8);
+        let signature_bytes: [u8; 32] = std::array::from_fn(|i| (i as u8).wrapping_add(0x80));
+
+        // The real, genuine minicbor-derived struct value a `signer: SchnorrSignatureBytes`
+        // template parameter actually decodes from on-chain.
+        let real_signature = SchnorrSignatureBytes::new(
+            RistrettoPublicKeyBytes::from(public_nonce_bytes),
+            Scalar32Bytes::from(signature_bytes),
+        );
+        // Encoded via `tari_bor::encode`, the exact encoder `InstructionArg::from_type` (used
+        // by every scalar `encode_arg` arm) itself wraps — i.e. the real wire bytes a genuine
+        // minicbor `Encode::encode` call for this struct produces, not a hand-rolled guess.
+        let real_cbor = tari_bor::encode(&real_signature).expect("real struct must encode");
+
+        // This gateway's composite-struct encoding pattern: a List of two Bytes elements,
+        // one per field, in declaration order.
+        let dsl_arg = encode_arg(&ArgValue::List(vec![
+            ArgValue::Bytes(public_nonce_bytes.to_vec()),
+            ArgValue::Bytes(signature_bytes.to_vec()),
+        ]))
+        .expect("List-of-Bytes composite arg must encode");
+        let dsl_cbor = dsl_arg
+            .as_literal_bytes()
+            .expect("List/Optional arms always produce a Literal carrier")
+            .to_vec();
+
+        assert_eq!(
+            dsl_cbor, real_cbor,
+            "the gateway's {{\"List\": [{{\"Bytes\": ..}}, {{\"Bytes\": ..}}]}} composite-arg \
+             encoding must produce byte-identical CBOR to the real minicbor-derived \
+             SchnorrSignatureBytes::encode"
+        );
+
+        // Round-trip: the real struct's own `Decode` impl must accept the DSL-encoded bytes,
+        // proving this isn't just accidentally-equal bytes but a genuinely valid encoding of
+        // the real type.
+        let decoded: SchnorrSignatureBytes = tari_bor::decode(&dsl_cbor)
+            .expect("real SchnorrSignatureBytes::decode must accept the DSL encoding");
+        assert_eq!(decoded, real_signature);
+    }
+
     /// Real live test: resolve the funded `mcp-gateway-account` test account (AGENTS.md) from
     /// the live indexer's real substate route, confirming component→template resolution
     /// against real data. Moved here verbatim from `read.rs` when this module was extracted
