@@ -93,6 +93,32 @@ pub struct CallOotleReadFunctionRequest {
     /// types use `Address`; `Other{name: "Amount"}` uses `Amount`; primitives map to their
     /// same-named tag (`U32`/`I8`/etc. all encode fine via the `U64`/`I64` tags — the engine
     /// decodes by CBOR minimal-encoding, not by tag width).
+    ///
+    /// ## Composite/multi-field struct arguments (e.g. `SchnorrSignatureBytes`)
+    ///
+    /// A template-specific `Other{name}` type that is a genuine multi-field struct (NOT a
+    /// single-field/transparent byte-array newtype like `RistrettoPublicKeyBytes` or
+    /// `ResourceAddress`, which use `Address`/`Bytes` directly) has no dedicated `ArgValue`
+    /// tag of its own — encode it as `{"List": [<field 0>, <field 1>, ...]}`, one element per
+    /// struct field IN DECLARATION ORDER. This works because every such struct's real
+    /// `minicbor::Encode` derive uses the (default, unmarked) array encoding: it serializes to
+    /// a definite-length CBOR array of its fields in order, which is byte-identical to what
+    /// `ArgValue::List` already produces for its (also CBOR-array-encoded) elements — no
+    /// dedicated "struct" `ArgValue` variant is needed, this is not a special case of `List`,
+    /// it's the same encoding.
+    ///
+    /// Worked example: `SchnorrSignatureBytes { public_nonce: RistrettoPublicKeyBytes,
+    /// signature: Scalar32Bytes }` (both fields are 32-byte transparent byte-array newtypes,
+    /// so each lowers to a CBOR byte string via `Bytes`) is
+    /// `{"List": [{"Bytes": "<32-byte-hex public_nonce>"}, {"Bytes": "<32-byte-hex
+    /// signature>"}]}` — a 2-element array of byte strings, NOT a flat 64-byte string and NOT
+    /// a 64-element array of individual byte scalars. This generalizes to any composite
+    /// struct argument: nest each field's own `ArgValue` encoding (which may itself be a
+    /// `List` for a nested composite field) inside the outer `List`, in the struct's real
+    /// field declaration order. See `tools::instruction`'s
+    /// `schnorr_signature_bytes_list_encodes_byte_identically_to_the_real_minicbor_struct`
+    /// test for a byte-identical-CBOR proof against the real, pinned-commit
+    /// `tari_template_lib_types::crypto::SchnorrSignatureBytes` type.
     #[serde(default)]
     pub args: Vec<JsonValue>,
     /// Component address or account name whose `pay_fee` method funds this dry run's (unused)
